@@ -200,10 +200,10 @@ create_site_interactive() {
     fi
 
     # PHP version for Laravel/WordPress
-    php_version="8.2"
+    php_version="8.3"
     if [[ "$site_type" == "laravel" || "$site_type" == "wordpress" ]]; then
-        read -p "Enter PHP version (default: 8.2): " php_input
-        php_version=${php_input:-8.2}
+        read -p "Enter PHP version (default: 8.3): " php_input
+        php_version=${php_input:-8.3}
     fi
 
     # Port for Node.js/Proxy
