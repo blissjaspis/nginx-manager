@@ -80,9 +80,9 @@ generate_ssl() {
 
     print_color "$BLUE" "Generating SSL certificate for $domain..."
     if [[ "$www_enabled" == "yes" ]]; then
-        sudo certbot --nginx -d "$domain" -d "www.$domain" --email "$email" --agree-tos --non-interactive
+        sudo certbot --nginx -d "$domain" -d "www.$domain" --email "$email" --agree-tos --non-interactive --expand
     else
-        sudo certbot --nginx -d "$domain" --email "$email" --agree-tos --non-interactive
+        sudo certbot --nginx -d "$domain" --email "$email" --agree-tos --non-interactive --expand
     fi
 }
 
@@ -200,10 +200,10 @@ create_site_interactive() {
     fi
 
     # PHP version for Laravel/WordPress
-    php_version="8.3"
+    php_version="8.4"
     if [[ "$site_type" == "laravel" || "$site_type" == "wordpress" ]]; then
-        read -p "Enter PHP version (default: 8.3): " php_input
-        php_version=${php_input:-8.3}
+        read -p "Enter PHP version (default: 8.4): " php_input
+        php_version=${php_input:-8.4}
     fi
 
     # Port for Node.js/Proxy
