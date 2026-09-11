@@ -16,7 +16,16 @@ NC='\033[0m'
 # Configuration
 NGINX_SITES_AVAILABLE="/etc/nginx/sites-available"
 NGINX_SITES_ENABLED="/etc/nginx/sites-enabled"
-TEMPLATES_DIR="$(dirname "$0")/templates"
+
+# Resolve this script's directory, following symlinks
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+    SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$SCRIPT_DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+TEMPLATES_DIR="$SCRIPT_DIR/templates"
 
 print_color() {
     echo -e "${1}${2}${NC}"
@@ -63,8 +72,10 @@ reload_nginx() {
     print_color "$BLUE" "Reloading nginx..."
     if sudo systemctl reload nginx 2>/dev/null || sudo service nginx reload 2>/dev/null; then
         print_color "$GREEN" "✓ nginx reloaded successfully"
+        return 0
     else
         print_color "$RED" "✗ Failed to reload nginx"
+        return 1
     fi
 }
 
@@ -148,15 +159,22 @@ server {
 
     # Test and optionally setup SSL
     if test_nginx_config; then
-        if [[ "$ssl_enabled" == "yes" && -n "$email" ]]; then
-            if generate_ssl "$domain" "$email" "$www_enabled"; then
-                print_color "$GREEN" "✓ SSL enabled for $domain"
+        if [[ "$ssl_enabled" == "yes" ]]; then
+            if [[ -n "$email" ]]; then
+                if generate_ssl "$domain" "$email" "$www_enabled"; then
+                    print_color "$GREEN" "✓ SSL enabled for $domain"
+                fi
+            else
+                print_color "$YELLOW" "⚠ SSL was requested but no email was provided. Skipping certificate generation."
             fi
         fi
-        reload_nginx
+        reload_nginx || true
         print_color "$GREEN" "✓ Site $domain is now active!"
     else
-        print_color "$RED" "Configuration has errors. Please check and try again."
+        # Disable the broken config so nginx stays healthy
+        sudo rm -f "$NGINX_SITES_ENABLED/$domain"
+        print_color "$RED" "✗ Configuration has errors. The site has been disabled."
+        print_color "$YELLOW" "  Review the config at: $config_file"
     fi
 }
 
@@ -171,7 +189,7 @@ create_site_interactive() {
     echo "5) Single Page Application (SPA)"
     echo "6) Reverse Proxy"
     echo
-    read -p "Enter choice (1-6): " site_type_choice
+    read -r -p "Enter choice (1-6): " site_type_choice
 
     case $site_type_choice in
         1) site_type="laravel" ;;
@@ -185,7 +203,7 @@ create_site_interactive() {
 
     # Domain input
     while true; do
-        read -p "Enter domain name (e.g., example.com): " domain
+        read -r -p "Enter domain name (e.g., example.com): " domain
         if validate_domain "$domain"; then
             break
         fi
@@ -195,44 +213,53 @@ create_site_interactive() {
     # Root path (not needed for proxy)
     root_path=""
     if [[ "$site_type" != "proxy" ]]; then
-        read -p "Enter document root path (default: /var/www/$domain): " root_path
+        read -r -p "Enter document root path (default: /var/www/$domain): " root_path
         root_path=${root_path:-/var/www/$domain}
     fi
 
     # PHP version for Laravel/WordPress
     php_version="8.4"
     if [[ "$site_type" == "laravel" || "$site_type" == "wordpress" ]]; then
-        read -p "Enter PHP version (default: 8.4): " php_input
+        read -r -p "Enter PHP version (default: 8.4): " php_input
         php_version=${php_input:-8.4}
     fi
 
     # Port for Node.js/Proxy
     port="3000"
     if [[ "$site_type" == "nodejs" || "$site_type" == "proxy" ]]; then
-        read -p "Enter application port (default: 3000): " port_input
-        port=${port_input:-3000}
+        while true; do
+            read -r -p "Enter application port (default: 3000): " port_input
+            port=${port_input:-3000}
+            if [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )); then
+                break
+            fi
+            print_color "$RED" "Invalid port. Enter a number between 1 and 65535."
+        done
     fi
 
     # SSL configuration
     ssl_enabled="no"
     email=""
-    read -p "Enable SSL with Let's Encrypt? (y/n): " ssl_choice
+    read -r -p "Enable SSL with Let's Encrypt? (y/n): " ssl_choice
     if [[ "$ssl_choice" =~ ^[Yy] ]]; then
         ssl_enabled="yes"
-        read -p "Enter email for Let's Encrypt: " email
+        while [[ -z "$email" ]]; do
+            read -r -p "Enter email for Let's Encrypt: " email
+            [[ -z "$email" ]] && print_color "$RED" "Email is required for SSL. Please try again."
+        done
     fi
 
     # www subdomain configuration
     www_enabled="no"
     www_is_main="no"
-    read -p "Include www subdomain? (y/n): " www_choice
+    read -r -p "Include www subdomain? (y/n): " www_choice
     if [[ "$www_choice" =~ ^[Yy] ]]; then
         www_enabled="yes"
         echo
         print_color "$YELLOW" "Which domain should be the main one?"
         echo "1) Naked domain (${domain}) - redirect www to naked"
         echo "2) www domain (www.${domain}) - redirect naked to www"
-        read -p "Choose (1 or 2): " main_choice
+        read -r -p "Choose (1 or 2): " main_choice
         [[ "$main_choice" == "2" ]] && www_is_main="yes"
     fi
 
@@ -256,7 +283,7 @@ create_site_interactive() {
     fi
     echo
 
-    read -p "Continue? (y/n): " confirm
+    read -r -p "Continue? (y/n): " confirm
     if [[ ! "$confirm" =~ ^[Yy] ]]; then
         print_color "$YELLOW" "Operation cancelled."
         return 0
@@ -285,16 +312,19 @@ list_sites() {
 }
 
 remove_site() {
-    list_sites
-    read -p "Enter site name to remove: " site_name
+    local site_name=$1
+    if [[ -z "$site_name" ]]; then
+        list_sites
+        read -r -p "Enter site name to remove: " site_name
+    fi
 
     if [[ -f "$NGINX_SITES_AVAILABLE/$site_name" ]]; then
-        read -p "Are you sure you want to remove $site_name? (y/n): " confirm
+        read -r -p "Are you sure you want to remove $site_name? (y/n): " confirm
         if [[ "$confirm" =~ ^[Yy] ]]; then
             sudo rm -f "$NGINX_SITES_ENABLED/$site_name"
             sudo rm -f "$NGINX_SITES_AVAILABLE/$site_name"
             print_color "$GREEN" "✓ Site $site_name removed"
-            reload_nginx
+            reload_nginx || true
         fi
     else
         print_color "$RED" "Site $site_name not found"
@@ -312,18 +342,18 @@ main_menu() {
         echo "5) Reload nginx"
         echo "6) Exit"
         echo
-        read -p "Enter choice (1-6): " choice
+        read -r -p "Enter choice (1-6): " choice || true
 
         case $choice in
-            1) create_site_interactive ;;
-            2) list_sites ;;
-            3) remove_site ;;
-            4) test_nginx_config ;;
-            5) reload_nginx ;;
+            1) create_site_interactive || true ;;
+            2) list_sites || true ;;
+            3) remove_site || true ;;
+            4) test_nginx_config || true ;;
+            5) reload_nginx || true ;;
             6) print_color "$GREEN" "Goodbye!"; exit 0 ;;
             *) print_color "$RED" "Invalid choice" ;;
         esac
-        read -p "Press Enter to continue..."
+        read -r -p "Press Enter to continue..." || true
     done
 }
 
@@ -336,9 +366,10 @@ main() {
         case $1 in
             create) create_site_interactive ;;
             list) list_sites ;;
+            remove) remove_site "${2:-}" ;;
             test) test_nginx_config ;;
             reload) reload_nginx ;;
-            *) echo "Usage: $0 [create|list|test|reload]"; echo "Run without arguments for interactive mode." ;;
+            *) echo "Usage: $0 [create|list|remove [site]|test|reload]"; echo "Run without arguments for interactive mode." ;;
         esac
     fi
 }

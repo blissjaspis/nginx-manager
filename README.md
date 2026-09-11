@@ -63,7 +63,7 @@ This will present you with a menu where you can:
 3. Remove sites
 4. Test nginx configuration
 5. Reload nginx
-6. Install/Update templates
+6. Exit
 
 ### Command Line Mode
 
@@ -76,14 +76,14 @@ sudo ./nginx-manager.sh create
 # List all sites
 ./nginx-manager.sh list
 
+# Remove a site (prompts if no name is given)
+sudo ./nginx-manager.sh remove example.com
+
 # Test nginx configuration
 sudo ./nginx-manager.sh test
 
 # Reload nginx
 sudo ./nginx-manager.sh reload
-
-# Install templates
-sudo ./nginx-manager.sh install-templates
 ```
 
 ## Quick Start Examples
