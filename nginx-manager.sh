@@ -413,8 +413,13 @@ add_www_to_site() {
 # Redirect to main domain
 server {
     listen 80;
+    listen 443 ssl;
     server_name $redirect_server_name;
-    return 301 \$scheme://$redirect_target\$request_uri;
+
+    ssl_certificate $LETSENCRYPT_DIR/$site_name/fullchain.pem;
+    ssl_certificate_key $LETSENCRYPT_DIR/$site_name/privkey.pem;
+
+    return 301 https://$redirect_target\$request_uri;
 }
 EOF
 
