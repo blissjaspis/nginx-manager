@@ -61,9 +61,10 @@ This will present you with a menu where you can:
 1. Create new site configurations
 2. List existing sites
 3. Remove sites
-4. Test nginx configuration
-5. Reload nginx
-6. Exit
+4. Add www to an existing site (expands its SSL certificate)
+5. Test nginx configuration
+6. Reload nginx
+7. Exit
 
 ### Command Line Mode
 
@@ -78,6 +79,9 @@ sudo ./nginx-manager.sh create
 
 # Remove a site (prompts if no name is given)
 sudo ./nginx-manager.sh remove example.com
+
+# Add www to an existing site (prompts for main domain if not given)
+sudo ./nginx-manager.sh add-www example.com naked
 
 # Test nginx configuration
 sudo ./nginx-manager.sh test

@@ -16,6 +16,7 @@ NC='\033[0m'
 # Configuration
 NGINX_SITES_AVAILABLE="/etc/nginx/sites-available"
 NGINX_SITES_ENABLED="/etc/nginx/sites-enabled"
+LETSENCRYPT_DIR="/etc/letsencrypt/live"
 
 # Resolve this script's directory, following symlinks
 SOURCE="${BASH_SOURCE[0]}"
@@ -331,6 +332,104 @@ remove_site() {
     fi
 }
 
+add_www_to_site() {
+    local site_name=$1
+    local main_domain=$2
+
+    if [[ -z "$site_name" ]]; then
+        list_sites
+        read -r -p "Enter site name to add www to: " site_name
+    fi
+
+    local config_file="$NGINX_SITES_AVAILABLE/$site_name"
+    if [[ ! -f "$config_file" ]]; then
+        print_color "$RED" "Site $site_name not found"
+        return 1
+    fi
+
+    if sudo grep -qF "www.$site_name" "$config_file"; then
+        print_color "$YELLOW" "www.$site_name is already configured for this site."
+        return 1
+    fi
+
+    if [[ "$main_domain" != "www" && "$main_domain" != "naked" ]]; then
+        print_color "$YELLOW" "Which domain should be the main one?"
+        echo "1) Naked domain (${site_name}) - redirect www to naked"
+        echo "2) www domain (www.${site_name}) - redirect naked to www"
+        read -r -p "Choose (1 or 2): " main_choice
+        if [[ "$main_choice" == "2" ]]; then
+            main_domain="www"
+        else
+            main_domain="naked"
+        fi
+    fi
+
+    if ! command -v certbot &> /dev/null; then
+        print_color "$RED" "Certbot not found. Install certbot to expand the SSL certificate."
+        return 1
+    fi
+
+    if [[ ! -d "$LETSENCRYPT_DIR/$site_name" ]]; then
+        print_color "$RED" "No existing Let's Encrypt certificate found for $site_name."
+        print_color "$YELLOW" "Set up SSL for $site_name first (Create new site with SSL enabled)."
+        return 1
+    fi
+
+    local server_name_value
+    local redirect_server_name
+    local redirect_target
+    if [[ "$main_domain" == "www" ]]; then
+        server_name_value="www.$site_name"
+        redirect_server_name="$site_name"
+        redirect_target="www.$site_name"
+    else
+        server_name_value="$site_name"
+        redirect_server_name="www.$site_name"
+        redirect_target="$site_name"
+    fi
+
+    print_color "$BLUE" "Expanding SSL certificate for $site_name to include www.$site_name..."
+    if ! sudo certbot certonly --nginx -d "$site_name" -d "www.$site_name" --expand --non-interactive; then
+        print_color "$RED" "✗ Failed to expand the certificate. No changes were made."
+        return 1
+    fi
+    print_color "$GREEN" "✓ Certificate now covers $site_name and www.$site_name"
+
+    local backup_file="${config_file}.bak"
+    sudo cp "$config_file" "$backup_file"
+
+    local patched_content
+    patched_content=$(sudo awk -v name="$server_name_value" '
+        !patched && /^[[:space:]]*server_name[[:space:]]/ {
+            sub(/server_name[[:space:]]+[^;]+;/, "server_name " name ";")
+            patched = 1
+        }
+        { print }
+    ' "$config_file")
+    printf '%s\n' "$patched_content" | sudo tee "$config_file" > /dev/null
+
+    sudo tee -a "$config_file" > /dev/null <<EOF
+
+# Redirect to main domain
+server {
+    listen 80;
+    server_name $redirect_server_name;
+    return 301 \$scheme://$redirect_target\$request_uri;
+}
+EOF
+
+    print_color "$BLUE" "Testing nginx configuration..."
+    if ! test_nginx_config; then
+        sudo mv "$backup_file" "$config_file"
+        print_color "$RED" "✗ Configuration has errors. Changes have been reverted."
+        return 1
+    fi
+    sudo rm -f "$backup_file"
+
+    reload_nginx || true
+    print_color "$GREEN" "✓ www.$site_name added (main domain: $server_name_value)"
+}
+
 main_menu() {
     while true; do
         print_banner
@@ -338,19 +437,21 @@ main_menu() {
         echo "1) Create new site configuration"
         echo "2) List existing sites"
         echo "3) Remove site"
-        echo "4) Test nginx configuration"
-        echo "5) Reload nginx"
-        echo "6) Exit"
+        echo "4) Add www to existing site"
+        echo "5) Test nginx configuration"
+        echo "6) Reload nginx"
+        echo "7) Exit"
         echo
-        read -r -p "Enter choice (1-6): " choice || true
+        read -r -p "Enter choice (1-7): " choice || true
 
         case $choice in
             1) create_site_interactive || true ;;
             2) list_sites || true ;;
             3) remove_site || true ;;
-            4) test_nginx_config || true ;;
-            5) reload_nginx || true ;;
-            6) print_color "$GREEN" "Goodbye!"; exit 0 ;;
+            4) add_www_to_site || true ;;
+            5) test_nginx_config || true ;;
+            6) reload_nginx || true ;;
+            7) print_color "$GREEN" "Goodbye!"; exit 0 ;;
             *) print_color "$RED" "Invalid choice" ;;
         esac
         read -r -p "Press Enter to continue..." || true
@@ -367,9 +468,10 @@ main() {
             create) create_site_interactive ;;
             list) list_sites ;;
             remove) remove_site "${2:-}" ;;
+            add-www) add_www_to_site "${2:-}" "${3:-}" ;;
             test) test_nginx_config ;;
             reload) reload_nginx ;;
-            *) echo "Usage: $0 [create|list|remove [site]|test|reload]"; echo "Run without arguments for interactive mode." ;;
+            *) echo "Usage: $0 [create|list|remove [site]|add-www [site] [naked|www]|test|reload]"; echo "Run without arguments for interactive mode." ;;
         esac
     fi
 }
